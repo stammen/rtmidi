@@ -85,6 +85,9 @@ void RtMidi :: getCompiledApi( std::vector<RtMidi::Api> &apis ) throw()
 #if defined(__WINDOWS_MM__)
   apis.push_back( WINDOWS_MM );
 #endif
+#if defined(__WINDOWS_WINRT__)
+  apis.push_back( WINDOWS_WINRT );
+#endif
 #if defined(__RTMIDI_DUMMY__)
   apis.push_back( RTMIDI_DUMMY );
 #endif
@@ -111,6 +114,10 @@ void RtMidiIn :: openMidiApi( RtMidi::Api api, const std::string clientName, uns
 #if defined(__WINDOWS_MM__)
   if ( api == WINDOWS_MM )
     rtapi_ = new MidiInWinMM( clientName, queueSizeLimit );
+#endif
+#if defined(__WINDOWS_WINRT__)
+  if (api == WINDOWS_WINRT)
+      rtapi_ = new MidiInWinRT(clientName, queueSizeLimit);
 #endif
 #if defined(__MACOSX_CORE__)
   if ( api == MACOSX_CORE )
@@ -180,6 +187,10 @@ void RtMidiOut :: openMidiApi( RtMidi::Api api, const std::string clientName )
 #if defined(__WINDOWS_MM__)
   if ( api == WINDOWS_MM )
     rtapi_ = new MidiOutWinMM( clientName );
+#endif
+#if defined(__WINDOWS_WINRT__)
+  if (api == WINDOWS_WINRT)
+      rtapi_ = new MidiOutWinRT(clientName);
 #endif
 #if defined(__MACOSX_CORE__)
   if ( api == MACOSX_CORE )
@@ -2425,6 +2436,468 @@ void MidiOutWinMM :: sendMessage( std::vector<unsigned char> *message )
 
 #endif  // __WINDOWS_MM__
 
+//*********************************************************************//
+//  API: Windows Multimedia Library (MM)
+//*********************************************************************//
+
+// API information deciphered from:
+//  - http://msdn.microsoft.com/library/default.asp?url=/library/en-us/multimed/htm/_win32_midi_reference.asp
+
+// Thanks to Jean-Baptiste Berruchon for the sysex code.
+
+#if defined(__WINDOWS_WINRT__)
+
+// The Windows RunTime API is based on the use of a callback function for
+// MIDI input.  We convert the system specific time stamps to delta
+// time values.
+
+// Windows MM MIDI header files.
+#include <windows.h>
+#include <wrl\wrappers\corewrappers.h>
+#include <wrl\client.h>
+
+using namespace ABI::Windows::Foundation;
+using namespace Microsoft::WRL;
+using namespace Microsoft::WRL::Wrappers;
+
+
+using namespace Windows::Devices::Midi;
+using namespace Windows::Devices::Enumeration;
+
+// A structure to hold variables related to the CoreMIDI API
+// implementation.
+struct WinRTMidiData {
+    MidiInPort^ inPort;    // Midi Input Device
+    MidiOutPort^ outPort;   // Midi Output Device
+    DWORD lastTime;
+    MidiInApi::MidiMessage message;
+    CRITICAL_SECTION _mutex; // [Patrice] see https://groups.google.com/forum/#!topic/mididev/6OUjHutMpEo
+};
+
+//*********************************************************************//
+//  API: Windows WiNRT
+//  Class Definitions: MidiInWinMM
+//*********************************************************************//
+
+static void CALLBACK midiInputCallback(HMIDIIN /*hmin*/,
+    UINT inputStatus,
+    DWORD_PTR instancePtr,
+    DWORD_PTR midiMessage,
+    DWORD timestamp)
+{
+    if (inputStatus != MIM_DATA && inputStatus != MIM_LONGDATA && inputStatus != MIM_LONGERROR) return;
+
+    MidiInApi::RtMidiInData *data = (MidiInApi::RtMidiInData *)instancePtr;
+    WinRTMidiData *apiData = static_cast<WinRTMidiData *> (data->apiData);
+
+    // Calculate time stamp.
+    if (data->firstMessage == true) {
+        apiData->message.timeStamp = 0.0;
+        data->firstMessage = false;
+    }
+    else apiData->message.timeStamp = (double)(timestamp - apiData->lastTime) * 0.001;
+    apiData->lastTime = timestamp;
+
+    if (inputStatus == MIM_DATA) { // Channel or system message
+
+                                   // Make sure the first byte is a status byte.
+        unsigned char status = (unsigned char)(midiMessage & 0x000000FF);
+        if (!(status & 0x80)) return;
+
+        // Determine the number of bytes in the MIDI message.
+        unsigned short nBytes = 1;
+        if (status < 0xC0) nBytes = 3;
+        else if (status < 0xE0) nBytes = 2;
+        else if (status < 0xF0) nBytes = 3;
+        else if (status == 0xF1) {
+            if (data->ignoreFlags & 0x02) return;
+            else nBytes = 2;
+        }
+        else if (status == 0xF2) nBytes = 3;
+        else if (status == 0xF3) nBytes = 2;
+        else if (status == 0xF8 && (data->ignoreFlags & 0x02)) {
+            // A MIDI timing tick message and we're ignoring it.
+            return;
+        }
+        else if (status == 0xFE && (data->ignoreFlags & 0x04)) {
+            // A MIDI active sensing message and we're ignoring it.
+            return;
+        }
+
+        // Copy bytes to our MIDI message.
+        unsigned char *ptr = (unsigned char *)&midiMessage;
+        for (int i = 0; i<nBytes; ++i) apiData->message.bytes.push_back(*ptr++);
+    }
+    else { // Sysex message ( MIM_LONGDATA or MIM_LONGERROR )
+        MIDIHDR *sysex = (MIDIHDR *)midiMessage;
+        if (!(data->ignoreFlags & 0x01) && inputStatus != MIM_LONGERROR) {
+            // Sysex message and we're not ignoring it
+            for (int i = 0; i<(int)sysex->dwBytesRecorded; ++i)
+                apiData->message.bytes.push_back(sysex->lpData[i]);
+        }
+
+
+    }
+
+    if (data->usingCallback) {
+        RtMidiIn::RtMidiCallback callback = (RtMidiIn::RtMidiCallback) data->userCallback;
+        callback(apiData->message.timeStamp, &apiData->message.bytes, data->userData);
+    }
+    else {
+        // As long as we haven't reached our queue size limit, push the message.
+        if (data->queue.size < data->queue.ringSize) {
+            data->queue.ring[data->queue.back++] = apiData->message;
+            if (data->queue.back == data->queue.ringSize)
+                data->queue.back = 0;
+            data->queue.size++;
+        }
+        else
+            std::cerr << "\nRtMidiIn: message queue limit reached!!\n\n";
+    }
+
+    // Clear the vector for the next input message.
+    apiData->message.bytes.clear();
+}
+
+MidiInWinRT::MidiInWinRT(const std::string clientName, unsigned int queueSizeLimit) : MidiInApi(queueSizeLimit)
+{
+    initialize(clientName);
+}
+
+MidiInWinRT :: ~MidiInWinRT()
+{
+    // Close a connection if it exists.
+    closePort();
+
+    WinRTMidiData *data = static_cast<WinRTMidiData *> (apiData_);
+    DeleteCriticalSection(&(data->_mutex));
+
+    // Cleanup.
+    delete data;
+}
+
+void MidiInWinRT::initialize(const std::string& /*clientName*/)
+{
+    // Initialize the Windows Runtime.
+    RoInitializeWrapper initialize(RO_INIT_MULTITHREADED);
+
+    mPortWatcher = WinRT::WinRTMidiInPortWatcher::getInstance();
+    mSubscriber = ref new WinRT::Subscriber;
+    mSubscriber2 = ref new WinRT::Subscriber;
+
+    // Save our api-specific connection information.
+    WinRTMidiData *data = (WinRTMidiData *) new WinRTMidiData;
+    apiData_ = (void *)data;
+    inputData_.apiData = (void *)data;
+    data->message.bytes.clear();  // needs to be empty for first input message
+
+    if (!InitializeCriticalSectionAndSpinCount(&(data->_mutex), 0x00000400)) {
+        errorString_ = "MidiInWinRT::initialize: InitializeCriticalSectionAndSpinCount failed.";
+        error(RtMidiError::WARNING, errorString_);
+    }
+}
+
+
+
+void MidiInWinRT::openPort(unsigned int portNumber, const std::string /*portName*/)
+{
+    if (connected_) {
+        errorString_ = "MidiInWinRT::openPort: a valid connection already exists!";
+        error(RtMidiError::WARNING, errorString_);
+        return;
+    }
+
+#if 0
+    unsigned int nDevices = midiInGetNumDevs();
+    if (nDevices == 0) {
+        errorString_ = "MidiInWinRT::openPort: no MIDI input sources found!";
+        error(RtMidiError::NO_DEVICES_FOUND, errorString_);
+        return;
+    }
+
+    if (portNumber >= nDevices) {
+        std::ostringstream ost;
+        ost << "MidiInWinRT::openPort: the 'portNumber' argument (" << portNumber << ") is invalid.";
+        errorString_ = ost.str();
+        error(RtMidiError::INVALID_PARAMETER, errorString_);
+        return;
+    }
+
+    WinRTMidiData *data = static_cast<WinRTMidiData *> (apiData_);
+
+    MMRESULT result = midiInOpen(&data->inHandle,
+        portNumber,
+        (DWORD_PTR)&midiInputCallback,
+        (DWORD_PTR)&inputData_,
+        CALLBACK_FUNCTION);
+    if (result != MMSYSERR_NOERROR) {
+        errorString_ = "MidiInWinRT::openPort: error creating Windows MM MIDI input port.";
+        error(RtMidiError::DRIVER_ERROR, errorString_);
+        return;
+    }
+
+
+    result = midiInStart(data->inHandle);
+    if (result != MMSYSERR_NOERROR) {
+        midiInClose(data->inHandle);
+        errorString_ = "MidiInWinRT::openPort: error starting Windows MM MIDI input port.";
+        error(RtMidiError::DRIVER_ERROR, errorString_);
+        return;
+    }
+#endif
+
+    connected_ = true;
+}
+
+void MidiInWinRT::openVirtualPort(std::string /*portName*/)
+{
+    // This function cannot be implemented for the Windows MM MIDI API.
+    errorString_ = "MidiInWinRT::openVirtualPort: cannot be implemented in Windows MM MIDI API!";
+    error(RtMidiError::WARNING, errorString_);
+}
+
+void MidiInWinRT::closePort(void)
+{
+    if (connected_) {
+        WinRTMidiData *data = static_cast<WinRTMidiData *> (apiData_);
+        EnterCriticalSection(&(data->_mutex));
+#if 0
+        midiInReset(data->inHandle);
+        midiInStop(data->inHandle);
+
+        midiInClose(data->inHandle);
+#endif
+        connected_ = false;
+        LeaveCriticalSection(&(data->_mutex));
+    }
+}
+
+unsigned int MidiInWinRT::getPortCount()
+{
+    return mPortWatcher->GetPortCount();
+}
+
+std::string MidiInWinRT::getPortName(unsigned int portNumber)
+{
+    std::string stringName;
+
+    unsigned int nDevices = getPortCount();
+    if (portNumber >= nDevices) {
+        std::ostringstream ost;
+        ost << "MidiOutWinRT::getPortName: the 'portNumber' argument (" << portNumber << ") is invalid.";
+        errorString_ = ost.str();
+        error(RtMidiError::WARNING, errorString_);
+        return stringName;
+    }
+
+    return WinRT::PlatformStringToString(mPortWatcher->GetPortName(portNumber));
+}
+
+//*********************************************************************//
+//  API: Windows MM
+//  Class Definitions: MidiOutWinRT
+//*********************************************************************//
+
+MidiOutWinRT::MidiOutWinRT(const std::string clientName) : MidiOutApi()
+{
+    initialize(clientName);
+}
+
+MidiOutWinRT :: ~MidiOutWinRT()
+{
+    // Close a connection if it exists.
+    closePort();
+
+    // Cleanup.
+    WinRTMidiData *data = static_cast<WinRTMidiData *> (apiData_);
+    delete data;
+}
+
+void MidiOutWinRT::initialize(const std::string& /*clientName*/)
+{
+    // Initialize the Windows Runtime.
+    RoInitializeWrapper initialize(RO_INIT_MULTITHREADED);
+
+    mPortWatcher = ref new WinRT::WinRTMidiPortWatcher(WinRT::WinRTMidiPortType::Out);
+
+
+    // We'll issue a warning here if no devices are available but not
+    // throw an error since the user can plug something in later.
+#if 0
+    unsigned int nDevices = midiOutGetNumDevs();
+    if (nDevices == 0) {
+        errorString_ = "MidiOutWinRT::initialize: no MIDI output devices currently available.";
+        error(RtMidiError::WARNING, errorString_);
+    }
+#endif
+
+    // Save our api-specific connection information.
+    WinRTMidiData *data = (WinRTMidiData *) new WinRTMidiData;
+    apiData_ = (void *)data;
+}
+
+unsigned int MidiOutWinRT::getPortCount()
+{
+    return mPortWatcher->GetPortCount();
+}
+
+std::string MidiOutWinRT::getPortName(unsigned int portNumber)
+{
+    std::string stringName;
+
+    unsigned int nDevices = getPortCount();
+    if (portNumber >= nDevices) {
+        std::ostringstream ost;
+        ost << "MidiOutWinRT::getPortName: the 'portNumber' argument (" << portNumber << ") is invalid.";
+        errorString_ = ost.str();
+        error(RtMidiError::WARNING, errorString_);
+        return stringName;
+    }
+
+    return WinRT::PlatformStringToString(mPortWatcher->GetPortName(portNumber));
+}
+
+void MidiOutWinRT::openPort(unsigned int portNumber, const std::string /*portName*/)
+{
+#if 0
+    if (connected_) {
+        errorString_ = "MidiOutWinRT::openPort: a valid connection already exists!";
+        error(RtMidiError::WARNING, errorString_);
+        return;
+    }
+
+    unsigned int nDevices = midiOutGetNumDevs();
+    if (nDevices < 1) {
+        errorString_ = "MidiOutWinRT::openPort: no MIDI output destinations found!";
+        error(RtMidiError::NO_DEVICES_FOUND, errorString_);
+        return;
+    }
+
+    if (portNumber >= nDevices) {
+        std::ostringstream ost;
+        ost << "MidiOutWinRT::openPort: the 'portNumber' argument (" << portNumber << ") is invalid.";
+        errorString_ = ost.str();
+        error(RtMidiError::INVALID_PARAMETER, errorString_);
+        return;
+    }
+
+    WinRTMidiData *data = static_cast<WinRTMidiData *> (apiData_);
+    MMRESULT result = midiOutOpen(&data->outHandle,
+        portNumber,
+        (DWORD)NULL,
+        (DWORD)NULL,
+        CALLBACK_NULL);
+    if (result != MMSYSERR_NOERROR) {
+        errorString_ = "MidiOutWinRT::openPort: error creating Windows MM MIDI output port.";
+        error(RtMidiError::DRIVER_ERROR, errorString_);
+        return;
+    }
+#endif
+    connected_ = true;
+}
+
+void MidiOutWinRT::closePort(void)
+{
+#if 0
+    if (connected_) {
+        WinRTMidiData *data = static_cast<WinRTMidiData *> (apiData_);
+        midiOutReset(data->outHandle);
+        midiOutClose(data->outHandle);
+        connected_ = false;
+    }
+#endif
+}
+
+void MidiOutWinRT::openVirtualPort(std::string /*portName*/)
+{
+    // This function cannot be implemented for the Windows MM MIDI API.
+    errorString_ = "MidiOutWinRT::openVirtualPort: cannot be implemented in Windows MM MIDI API!";
+    error(RtMidiError::WARNING, errorString_);
+}
+
+void MidiOutWinRT::sendMessage(std::vector<unsigned char> *message)
+{
+    if (!connected_) return;
+
+    unsigned int nBytes = static_cast<unsigned int>(message->size());
+    if (nBytes == 0) {
+        errorString_ = "MidiOutWinRT::sendMessage: message argument is empty!";
+        error(RtMidiError::WARNING, errorString_);
+        return;
+    }
+
+    MMRESULT result;
+    WinRTMidiData *data = static_cast<WinRTMidiData *> (apiData_);
+    if (message->at(0) == 0xF0) { // Sysex message
+
+                                  // Allocate buffer for sysex data.
+        char *buffer = (char *)malloc(nBytes);
+        if (buffer == NULL) {
+            errorString_ = "MidiOutWinRT::sendMessage: error allocating sysex message memory!";
+            error(RtMidiError::MEMORY_ERROR, errorString_);
+            return;
+        }
+
+        // Copy data to buffer.
+        for (unsigned int i = 0; i<nBytes; ++i) buffer[i] = message->at(i);
+
+        // Create and prepare MIDIHDR structure.
+        MIDIHDR sysex;
+        sysex.lpData = (LPSTR)buffer;
+        sysex.dwBufferLength = nBytes;
+        sysex.dwFlags = 0;
+#if 0
+        result = midiOutPrepareHeader(data->outHandle, &sysex, sizeof(MIDIHDR));
+        if (result != MMSYSERR_NOERROR) {
+            free(buffer);
+            errorString_ = "MidiOutWinRT::sendMessage: error preparing sysex header.";
+            error(RtMidiError::DRIVER_ERROR, errorString_);
+            return;
+        }
+
+        // Send the message.
+        result = midiOutLongMsg(data->outHandle, &sysex, sizeof(MIDIHDR));
+        if (result != MMSYSERR_NOERROR) {
+            free(buffer);
+            errorString_ = "MidiOutWinRT::sendMessage: error sending sysex message.";
+            error(RtMidiError::DRIVER_ERROR, errorString_);
+            return;
+        }
+
+        // Unprepare the buffer and MIDIHDR.
+        while (MIDIERR_STILLPLAYING == midiOutUnprepareHeader(data->outHandle, &sysex, sizeof(MIDIHDR))) Sleep(1);
+#endif
+        free(buffer);
+    }
+    else { // Channel or system message.
+
+           // Make sure the message size isn't too big.
+        if (nBytes > 3) {
+            errorString_ = "MidiOutWinRT::sendMessage: message size is greater than 3 bytes (and not sysex)!";
+            error(RtMidiError::WARNING, errorString_);
+            return;
+        }
+
+        // Pack MIDI bytes into double word.
+        DWORD packet;
+        unsigned char *ptr = (unsigned char *)&packet;
+        for (unsigned int i = 0; i<nBytes; ++i) {
+            *ptr = message->at(i);
+            ++ptr;
+        }
+
+        // Send the message immediately.
+#if 0
+        result = midiOutShortMsg(data->outHandle, packet);
+        if (result != MMSYSERR_NOERROR) {
+            errorString_ = "MidiOutWinRT::sendMessage: error sending MIDI message.";
+            error(RtMidiError::DRIVER_ERROR, errorString_);
+        }
+#endif
+    }
+}
+
+#endif  // __WINDOWS_WINRT__
 
 //*********************************************************************//
 //  API: UNIX JACK

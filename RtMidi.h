@@ -124,6 +124,7 @@ class RtMidi
     LINUX_ALSA,     /*!< The Advanced Linux Sound Architecture API. */
     UNIX_JACK,      /*!< The JACK Low-Latency MIDI Server API. */
     WINDOWS_MM,     /*!< The Microsoft Multimedia MIDI API. */
+    WINDOWS_WINRT,  /*!< The Microsoft Windows Runtime MIDI API. */
     RTMIDI_DUMMY    /*!< A compilable but non-functional API. */
   };
 
@@ -721,6 +722,54 @@ class MidiOutWinMM: public MidiOutApi
 
  protected:
   void initialize( const std::string& clientName );
+};
+
+#endif
+
+#if defined(__WINDOWS_WINRT__)
+
+#include "WinRTMidiPortWatcher.h"
+
+class MidiInWinRT : public MidiInApi
+{
+public:
+    MidiInWinRT(const std::string clientName, unsigned int queueSizeLimit);
+    ~MidiInWinRT(void);
+    RtMidi::Api getCurrentApi(void) { return RtMidi::WINDOWS_MM; };
+    void openPort(unsigned int portNumber, const std::string portName);
+    void openVirtualPort(const std::string portName);
+    void closePort(void);
+    unsigned int getPortCount(void);
+    std::string getPortName(unsigned int portNumber);
+
+protected:
+    void initialize(const std::string& clientName);
+
+private:
+    WinRT::WinRTMidiPortWatcher^ mPortWatcher;
+    WinRT::Subscriber^ mSubscriber;
+    WinRT::Subscriber^ mSubscriber2;
+
+};
+
+class MidiOutWinRT : public MidiOutApi
+{
+public:
+    MidiOutWinRT(const std::string clientName);
+    ~MidiOutWinRT(void);
+    RtMidi::Api getCurrentApi(void) { return RtMidi::WINDOWS_MM; };
+    void openPort(unsigned int portNumber, const std::string portName);
+    void openVirtualPort(const std::string portName);
+    void closePort(void);
+    unsigned int getPortCount(void);
+    std::string getPortName(unsigned int portNumber);
+    void sendMessage(std::vector<unsigned char> *message);
+
+protected:
+    void initialize(const std::string& clientName);
+
+private:
+    WinRT::WinRTMidiPortWatcher^ mPortWatcher;
 };
 
 #endif

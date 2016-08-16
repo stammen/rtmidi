@@ -25,6 +25,7 @@ typedef void* RtMidiOutPtr;
     RT_MIDI_API_UNIX_JACK,      /*!< The Jack Low-Latency MIDI Server API. */
     RT_MIDI_API_WINDOWS_MM,     /*!< The Microsoft Multimedia MIDI API. */
     RT_MIDI_API_WINDOWS_KS,     /*!< The Microsoft Kernel Streaming MIDI API. */
+    RT_MIDI_API_WINDOWS_WINRT,     /*!< The Microsoft Windows 10 WinRT MIDI API. */
     RT_MIDI_API_RTMIDI_DUMMY    /*!< A compilable but non-functional API. */
   };
 
