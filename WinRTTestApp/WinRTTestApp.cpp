@@ -19,11 +19,30 @@ void printPortNames(RtMidi* port)
     }
 
     int nPorts = port->getPortCount();
-    for (int i = 0; i < nPorts; i++) 
+    for (int i = 0; i < nPorts; i++)
     {
         std::cout << i << ": " << port->getPortName(i) << std::endl;
     }
 }
+
+void printAllPortNames()
+{
+    if (midiin != nullptr)
+    {
+        std::cout << "MIDI In Ports" << std::endl;
+        printPortNames(midiin);
+    }
+
+    if (midiout != nullptr)
+    {
+        std::cout << std::endl << "MIDI Out Ports" << std::endl;
+        printPortNames(midiout);
+    }
+    std::cout << std::endl;
+}
+
+
+
 
 ref class Subscriber sealed
 {
@@ -45,31 +64,19 @@ public:
         switch (update)
         {
         case WinRTMidiPortUpdateType::PortAdded:
-            std::cout << std::endl << "***MIDI port added***" << std::endl;
+            std::cout << "***MIDI port added***" << std::endl;
             break;
 
         case WinRTMidiPortUpdateType::PortRemoved:
-            std::cout << std::endl << "***MIDI port removed***" << std::endl;
+            std::cout << "***MIDI port removed***" << std::endl;
             break;
 
         case WinRTMidiPortUpdateType::EnumerationComplete:
-            std::cout << std::endl << "***MIDI port enummeration complete***" << std::endl;
+            std::cout << "***MIDI port enummeration complete***" << std::endl;
             break;
         }
 
-        if (midiin != nullptr)
-        {
-            std::cout << "MIDI In Ports" << std::endl;
-            printPortNames(midiin);
-        }
-
-        if (midiout != nullptr)
-        {
-            std::cout << std::endl << "MIDI Out Ports" << std::endl;
-            printPortNames(midiout);
-        }
-
-        std::cout << std::endl;
+        printAllPortNames();
     }
 
 private:
@@ -84,8 +91,6 @@ int main(Platform::Array<Platform::String^>^ args)
     // RtMidiIn constructor
     try {
         midiin = new RtMidiIn();
-        std::cout << "MIDI In Ports" << std::endl;
-        printPortNames(midiin);
     }
     catch (RtMidiError &error) {
         // Handle the exception here
@@ -97,14 +102,13 @@ int main(Platform::Array<Platform::String^>^ args)
     // RtMidiOut constructor
     try {
         midiout = new RtMidiOut();
-        std::cout << "MIDI Out Ports" << std::endl;
-        printPortNames(midiout);
     }
     catch (RtMidiError &error) {
         // Handle the exception here
         error.printMessage();
     }
 
+    printAllPortNames();
 
 
     getchar();
