@@ -747,9 +747,6 @@ protected:
 
 private:
     WinRT::WinRTMidiPortWatcher^ mPortWatcher;
-    WinRT::Subscriber^ mSubscriber;
-    WinRT::Subscriber^ mSubscriber2;
-
 };
 
 class MidiOutWinRT : public MidiOutApi

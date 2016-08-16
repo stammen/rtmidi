@@ -11,7 +11,6 @@ namespace WinRT
     std::string PlatformStringToString(Platform::String^ s);
 
     ref class WinRTMidiPortWatcher;
-    delegate void SomethingHappenedEventHandler(WinRTMidiPortWatcher^ sender, Platform::String^ s);
 
     class WinRTMidiPortInfo
     {
@@ -30,6 +29,8 @@ namespace WinRT
     };
 
     public enum class WinRTMidiPortType : int { In, Out };
+    public enum class WinRTMidiPortUpdateType : int { PortAdded, PortRemoved, EnumerationComplete };
+    delegate void MidiPortUpdateHandler(WinRTMidiPortWatcher^ sender, WinRTMidiPortUpdateType update);
 
     ref class WinRTMidiPortWatcher
     {
@@ -37,13 +38,13 @@ namespace WinRT
         unsigned int GetPortCount();
         Platform::String^ GetPortName(unsigned int portNumber);
 
-        event SomethingHappenedEventHandler^ SomethingHappened;
-        void DoSomething()
+        event MidiPortUpdateHandler^ mMidiPortUpdateEventHander;
+        void OnMidiPortUpdated(WinRTMidiPortUpdateType update)
         {
             //Do something....
 
             // ...then fire the event:
-            SomethingHappened(this, L"Something happened.");
+            mMidiPortUpdateEventHander(this, update);
         }
 
     internal:
@@ -97,31 +98,6 @@ namespace WinRT
             : WinRTMidiPortWatcher(WinRTMidiPortType::Out)
         {}
     };
-
-    ref class Subscriber sealed
-    {
-    public:
-        Subscriber() : eventCount(0)
-        {
-            // Instantiate the class that publishes the event.
-            auto publisher = WinRTMidiInPortWatcher::getInstance();
-
-            // Subscribe to the event and provide a handler function.
-            publisher->SomethingHappened +=
-                ref new SomethingHappenedEventHandler(
-                    this,
-                    &Subscriber::MyEventHandler);
-        }
-
-        void MyEventHandler(WinRTMidiPortWatcher^ mc, Platform::String^ msg)
-        {
-            eventCount++;
-        }
-
-    private:
-        int eventCount;
-    };
-
 };
 
 

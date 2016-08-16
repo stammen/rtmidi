@@ -2582,8 +2582,6 @@ void MidiInWinRT::initialize(const std::string& /*clientName*/)
     RoInitializeWrapper initialize(RO_INIT_MULTITHREADED);
 
     mPortWatcher = WinRT::WinRTMidiInPortWatcher::getInstance();
-    mSubscriber = ref new WinRT::Subscriber;
-    mSubscriber2 = ref new WinRT::Subscriber;
 
     // Save our api-specific connection information.
     WinRTMidiData *data = (WinRTMidiData *) new WinRTMidiData;

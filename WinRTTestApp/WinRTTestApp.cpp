@@ -6,20 +6,81 @@
 #include <string>
 #include <iostream>
 
+using namespace WinRT;
+
+RtMidiIn *midiin = nullptr;
+RtMidiOut *midiout = nullptr;
+
 void printPortNames(RtMidi* port)
 {
-    int nPorts = port->getPortCount();
-    for (int i = 0; i < nPorts; i++)
+    if (port == nullptr)
     {
-        std::string name = port->getPortName(i);
-        std::cout << name << std::endl;
+        return;
+    }
+
+    int nPorts = port->getPortCount();
+    for (int i = 0; i < nPorts; i++) 
+    {
+        std::cout << i << ": " << port->getPortName(i) << std::endl;
     }
 }
+
+ref class Subscriber sealed
+{
+public:
+    Subscriber() : eventCount(0)
+    {
+        // Instantiate the class that publishes the event.
+        auto publisher = WinRTMidiInPortWatcher::getInstance();
+
+        // Subscribe to the event and provide a handler function.
+        publisher->mMidiPortUpdateEventHander +=
+            ref new MidiPortUpdateHandler(
+                this,
+                &Subscriber::MyEventHandler);
+    }
+
+    void MyEventHandler(WinRTMidiPortWatcher^ mc, WinRTMidiPortUpdateType update)
+    {
+        switch (update)
+        {
+        case WinRTMidiPortUpdateType::PortAdded:
+            std::cout << std::endl << "***MIDI port added***" << std::endl;
+            break;
+
+        case WinRTMidiPortUpdateType::PortRemoved:
+            std::cout << std::endl << "***MIDI port removed***" << std::endl;
+            break;
+
+        case WinRTMidiPortUpdateType::EnumerationComplete:
+            std::cout << std::endl << "***MIDI port enummeration complete***" << std::endl;
+            break;
+        }
+
+        if (midiin != nullptr)
+        {
+            std::cout << "MIDI In Ports" << std::endl;
+            printPortNames(midiin);
+        }
+
+        if (midiout != nullptr)
+        {
+            std::cout << std::endl << "MIDI Out Ports" << std::endl;
+            printPortNames(midiout);
+        }
+
+        std::cout << std::endl;
+    }
+
+private:
+    int eventCount;
+};
 
 
 int main(Platform::Array<Platform::String^>^ args)
 {
-    RtMidiIn *midiin = 0;
+    Subscriber^ subscriber = ref new Subscriber();
+
     // RtMidiIn constructor
     try {
         midiin = new RtMidiIn();
@@ -33,7 +94,6 @@ int main(Platform::Array<Platform::String^>^ args)
 
     std::cout << std::endl;
 
-    RtMidiOut *midiout = 0;
     // RtMidiOut constructor
     try {
         midiout = new RtMidiOut();
@@ -44,6 +104,8 @@ int main(Platform::Array<Platform::String^>^ args)
         // Handle the exception here
         error.printMessage();
     }
+
+
 
     getchar();
 
