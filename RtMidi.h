@@ -728,7 +728,7 @@ class MidiOutWinMM: public MidiOutApi
 
 #if defined(__WINDOWS_WINRT__)
 
-#include "WinRTMidiPortWatcher.h"
+#include "WinRTMidi.h"
 
 class MidiInWinRT : public MidiInApi
 {
@@ -742,11 +742,14 @@ public:
     unsigned int getPortCount(void);
     std::string getPortName(unsigned int portNumber);
 
+    void OnMidiMessageReceived(double timestamp, std::vector<unsigned char>* message);
+
 protected:
     void initialize(const std::string& clientName);
 
 private:
     WinRT::WinRTMidiPortWatcher^ mPortWatcher;
+    WinRT::WinRTMidi^ mPort;
 };
 
 class MidiOutWinRT : public MidiOutApi

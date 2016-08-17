@@ -41,5 +41,8 @@
     <ClInclude Include="..\WinRTMidi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\RtMidi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

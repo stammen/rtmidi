@@ -41,13 +41,10 @@ void printAllPortNames()
     std::cout << std::endl;
 }
 
-
-
-
 ref class Subscriber sealed
 {
 public:
-    Subscriber() : eventCount(0)
+    Subscriber()
     {
         // Instantiate the class that publishes the event.
         auto publisher = WinRTMidiInPortWatcher::getInstance();
@@ -78,11 +75,37 @@ public:
 
         printAllPortNames();
     }
-
-private:
-    int eventCount;
 };
 
+void midiPortWatcherCallback(WinRTMidiPortWatcher^ mc, WinRTMidiPortUpdateType update)
+{
+    switch (update)
+    {
+    case WinRTMidiPortUpdateType::PortAdded:
+        std::cout << "***MIDI port added***" << std::endl;
+        break;
+
+    case WinRTMidiPortUpdateType::PortRemoved:
+        std::cout << "***MIDI port removed***" << std::endl;
+        break;
+
+    case WinRTMidiPortUpdateType::EnumerationComplete:
+        std::cout << "***MIDI port enummeration complete***" << std::endl;
+        break;
+    }
+
+    printAllPortNames();
+}
+
+
+void midiInCallback(double deltatime, std::vector< unsigned char > *message, void *userData)
+{
+    unsigned int nBytes = message->size();
+    for (unsigned int i = 0; i < nBytes; i++)
+        std::cout << "Byte " << i << " = " << (int)message->at(i) << ", ";
+    if (nBytes > 0)
+        std::cout << "stamp = " << deltatime << std::endl;
+}
 
 int main(Platform::Array<Platform::String^>^ args)
 {
@@ -110,7 +133,8 @@ int main(Platform::Array<Platform::String^>^ args)
 
     printAllPortNames();
 
-
+    midiin->openPort(0);
+    midiin->setCallback(&midiInCallback);
     getchar();
 
     // Clean up

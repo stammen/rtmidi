@@ -37,6 +37,7 @@ namespace WinRT
     public:
         unsigned int GetPortCount();
         Platform::String^ GetPortName(unsigned int portNumber);
+        Platform::String^ GetPortId(unsigned int portNumber);
 
         event MidiPortUpdateHandler^ mMidiPortUpdateEventHander;
         void OnMidiPortUpdated(WinRTMidiPortUpdateType update)

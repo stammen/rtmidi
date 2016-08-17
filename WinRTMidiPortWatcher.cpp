@@ -73,6 +73,19 @@ namespace WinRT
         }
     }
 
+    Platform::String^ WinRTMidiPortWatcher::GetPortId(unsigned int portNumber)
+    {
+        CheckForEnumeration();
+        if (portNumber >= mPortInfo.size())
+        {
+            return "";
+        }
+        else
+        {
+            return mPortInfo[portNumber].get()->mID;
+        }
+    }
+
     unsigned int WinRTMidiPortWatcher::GetPortCount()
     {
         CheckForEnumeration();

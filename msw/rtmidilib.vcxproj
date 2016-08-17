@@ -92,6 +92,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\RtError.h" />
+    <ClInclude Include="..\RtMidi.h" />
     <ClInclude Include="..\rtmidi_c.h" />
     <ClInclude Include="..\WinRTMidi.h" />
     <ClInclude Include="..\WinRTMidiPortWatcher.h" />

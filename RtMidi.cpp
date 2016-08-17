@@ -2459,10 +2459,10 @@ void MidiOutWinMM :: sendMessage( std::vector<unsigned char> *message )
 using namespace ABI::Windows::Foundation;
 using namespace Microsoft::WRL;
 using namespace Microsoft::WRL::Wrappers;
-
-
 using namespace Windows::Devices::Midi;
 using namespace Windows::Devices::Enumeration;
+
+using namespace std::placeholders;
 
 // A structure to hold variables related to the CoreMIDI API
 // implementation.
@@ -2535,8 +2535,6 @@ static void CALLBACK midiInputCallback(HMIDIIN /*hmin*/,
             for (int i = 0; i<(int)sysex->dwBytesRecorded; ++i)
                 apiData->message.bytes.push_back(sysex->lpData[i]);
         }
-
-
     }
 
     if (data->usingCallback) {
@@ -2558,6 +2556,16 @@ static void CALLBACK midiInputCallback(HMIDIIN /*hmin*/,
     // Clear the vector for the next input message.
     apiData->message.bytes.clear();
 }
+
+void MidiInWinRT::OnMidiMessageReceived(double timestamp, std::vector<unsigned char>* message)
+{
+    if (inputData_.usingCallback)
+    {
+        RtMidiIn::RtMidiCallback callback = (RtMidiIn::RtMidiCallback) inputData_.userCallback;
+        callback(timestamp, message, nullptr);
+    }
+}
+
 
 MidiInWinRT::MidiInWinRT(const std::string clientName, unsigned int queueSizeLimit) : MidiInApi(queueSizeLimit)
 {
@@ -2595,8 +2603,6 @@ void MidiInWinRT::initialize(const std::string& /*clientName*/)
     }
 }
 
-
-
 void MidiInWinRT::openPort(unsigned int portNumber, const std::string /*portName*/)
 {
     if (connected_) {
@@ -2605,8 +2611,7 @@ void MidiInWinRT::openPort(unsigned int portNumber, const std::string /*portName
         return;
     }
 
-#if 0
-    unsigned int nDevices = midiInGetNumDevs();
+    unsigned int nDevices = mPortWatcher->GetPortCount();
     if (nDevices == 0) {
         errorString_ = "MidiInWinRT::openPort: no MIDI input sources found!";
         error(RtMidiError::NO_DEVICES_FOUND, errorString_);
@@ -2621,6 +2626,11 @@ void MidiInWinRT::openPort(unsigned int portNumber, const std::string /*portName
         return;
     }
 
+    mPort = ref new WinRT::WinRTMidi;
+    auto id = mPortWatcher->GetPortId(portNumber);
+    mPort->OpenMidiInPort(id);
+    mPort->SetMidiInCallback(std::bind(&MidiInWinRT::OnMidiMessageReceived, this, _1, _2));
+#if 0
     WinRTMidiData *data = static_cast<WinRTMidiData *> (apiData_);
 
     MMRESULT result = midiInOpen(&data->inHandle,
